@@ -18,7 +18,6 @@ cmake主目录CMakeLists.txt时add_subdirectory到tests文件下继续cmake
 # 本质：执行生产的二进制test文件
 $ ./test_main
 ```
-```
 ### rpc test demo
 examples/test_rpc
 ### kv test demo
