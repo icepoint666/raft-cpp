@@ -29,11 +29,12 @@ set_target_properties(libgtest PROPERTIES
 include_directories("${source_dir}/googletest/include")
 
 # User Modification
-
 # Compile the current directory *.cpp and compile main.cpp as executable file
+
+include_directories(${CMAKE_SOURCE_DIR}/rpclib/include)
 file(GLOB SRCS *.cpp)
 add_executable(test_raft ${SRCS})
-target_link_libraries(test_raft libgtest)
+target_link_libraries(test_raft libgtest ${CMAKE_SOURCE_DIR}/rpclib/librpc.a)
 
 add_test(NAME test_raft
          COMMAND test_raft)
