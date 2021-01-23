@@ -31,10 +31,13 @@ include_directories("${source_dir}/googletest/include")
 # User Modification
 # Compile the current directory *.cpp and compile main.cpp as executable file
 
-include_directories(${CMAKE_SOURCE_DIR}/rpclib/include)
-file(GLOB SRCS *.cpp)
-add_executable(test_raft ${SRCS})
-target_link_libraries(test_raft libgtest ${CMAKE_SOURCE_DIR}/rpclib/librpc.a)
+message(STATUS "[__INFO__] CMAKE_SOURCE_DIR: ${CMAKE_SOURCE_DIR}")
+#include_directories(${CMAKE_SOURCE_DIR}/mushroom)
 
-add_test(NAME test_raft
-         COMMAND test_raft)
+file(GLOB SRCS ${CMAKE_SOURCE_DIR}/test/*.cpp)
+add_executable(testcase ${SRCS})
+
+target_link_libraries(testcase libgtest ${CMAKE_SOURCE_DIR}/mushroom/build/libMushroom.a)
+
+add_test(NAME testcase
+         COMMAND testcase)
