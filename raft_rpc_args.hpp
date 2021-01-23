@@ -1,10 +1,3 @@
-/**
- *    > Author:        UncP
- *    > Github:  www.github.com/UncP/Mushroom
- *    > License:      BSD-3
- *    > Time:  2017-05-08 09:15:27
-**/
-
 #ifndef _RAFT_ARG_HPP_
 #define _RAFT_ARG_HPP_
 
