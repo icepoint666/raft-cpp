@@ -10,7 +10,7 @@
 
 #include <cassert>
 #include <unordered_map>
-
+#include <iostream>
 #include "../include/utility.hpp"
 #include "../include/atomic.hpp"
 #include "../network/server.hpp"
@@ -52,7 +52,6 @@ void RpcServer::Register(const char *str, T1 *obj, void (T1::*(fun))(const T2*, 
 	assert(services_.find(id) == services_.end());
 	services_.insert({id, rpc});
 }
-
 } // namespace Mushroom
 
 #endif /* _RPC_SERVER_HPP_ */

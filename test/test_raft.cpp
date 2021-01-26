@@ -5,33 +5,40 @@
 #include <iostream>
 #include <random>
 #include <map>
+#include <cstdio>
 
 #include "../mushroom/network/signal.hpp"
 #include "../mushroom/rpc/rpc_server.hpp"
 #include "../mushroom/network/eventbase.hpp"
 #include "../mushroom/rpc/rpc_connection.hpp"
 #include "../mushroom/include/thread.hpp"
+#include "../mushroom/network/time.hpp"
 #include "../raft.hpp"
 
 #include "gtest/gtest.h"
 
+#define RED "\033[0;32;31m"
+#define NONE "\033[m"
+#define YELLOW "\033[1;33m"
+#define GREEN "\033[0;32;32m"
+
 using namespace Mushroom;
 
-static EventBase* base = NULL;
-static Thread looptd = NULL;
+static EventBase* base = 0;
+static Thread* looptd = 0;
 static std::vector<RaftNode*>rafts;
 static std::vector<bool>connected;
 static int raft_port = 6200;
 
-uint32_t RaftNode::ElectionTimeoutBase = 200;
-uint32_t RaftNode::ElectionTimeoutTop = 400;
-uint32_t RaftNode::HeartbeatTimeInterval = 40;
+uint32_t RaftNode::ElectionTimeoutBase = 300;
+uint32_t RaftNode::ElectionTimeoutTop = 600;
+uint32_t RaftNode::HeartbeatTimeInterval = 30;
 
 static void startRaftCluster(int num){
     //启动集群
     //1.eventbase,事件循环线程 2.raft node构造函数 3.connection连接 4.raft node启动
     base = new EventBase(4, 16);
-    looptd = Thread([&]() {base->Loop(); });
+    looptd = new Thread([&]() {base->Loop(); });
     rafts.resize(num);
     connected.resize(num);
     for(int i = 0; i < num; i++){
@@ -40,13 +47,13 @@ static void startRaftCluster(int num){
     for(int i = 0; i < num; i++){
         for(int j = 0; j < num; j++){
             if(i == j)continue;
-            rafts[i]->connectPeer(new RpcConnection(EndPoint(raft_port+j, "127.0.0.1"), base.GetPoller(), 0.0))
+            rafts[i]->connectPeer(new RpcConnection(EndPoint(raft_port+j, "127.0.0.1"), base->GetPoller(), 0.0));
         }
         connected[i] = true;
     }
     looptd->Start();
     for (auto e : rafts)
-		e->Start();
+	 	e->Start();
 }
 
 static void closeRaftCluster(){
@@ -58,8 +65,8 @@ static void closeRaftCluster(){
 	if (looptd) looptd->Stop();
     delete base;
     delete looptd;
-    base = NULL;
-    looptd = NULL;
+    base = 0;
+    looptd = 0;
     rafts.clear();
     connected.clear();
 }
@@ -76,11 +83,11 @@ static void startServer(uint32_t idx){
 
 static void crashServer(uint32_t idx){
     connected[idx] = false;
-    for (auto e : rafts[id]->Peers())
+    for (auto e : rafts[idx]->Peers())
 		e->Disable();
-	for (auto e : rafts[id]->Connections())
+	for (auto e : rafts[idx]->Connections())
 		((RpcConnection *)e)->Disable();
-    rafts[idx]->Crash();
+    rafts[idx]->Close();
 
 }
 
@@ -97,7 +104,7 @@ static void checkNoLeader(){
             uint32_t term;
             bool leader = rafts[i]->isLeader(term);
             if(leader){
-                print("\031[0;32m[          ]\031[0;0m Expected No leader, but %d claims to be leader\n", i);
+                printf(RED"[          ]"NONE" Expected No leader, but %d claims to be leader\n", i);
             }
         }
     }
@@ -111,41 +118,42 @@ static uint32_t checkOneLeader(){
             uint32_t term;
             bool leader = rafts[i]->isLeader(term);
             if(leader){
-                leaders[term]++;
+                leaders[term] = rafts[i]->Id();
             }
         }
     }
-    uint32_t lastTermWithLeader = -1;
+    uint32_t lastTermWithLeader = ~0u;
     for(auto it=leaders.begin(); it!=leaders.end(); ++it){
         uint32_t term = it->first;
-        uint32_t leader_num = it->second;
+        uint32_t leader_id = it->second;
         if(leaders.size() > 1)
-            printf("\031[0;32m[          ]\031[0;0m Term %d has %d leader(s)\n", term, leader_num);  
-        if(term > lastTermWithLeader){
+            printf(RED"[          ]"NONE" Term %d has leader = %d\n", term, leader_id);  
+        if(lastTermWithLeader == ~0u || term > lastTermWithLeader){
             lastTermWithLeader = term;
         }
     }
     if(leaders.size() != 0){
         return leaders[lastTermWithLeader];
     }
-    printf("\031[0;32m[          ]\031[0;0m Expected one leader, got none\n");
-    return -1;
+    printf(RED"[          ]"NONE" Expected one leader, got none\n");
+    return ~0u;
 }
 
-static void CheckOneLeaderAfter(uint32_t t, uint32_t &number, int32_t &id) {
-	usleep(t * RaftNode::ElectionTimeoutBase * 1000)
+static void CheckOneLeaderAfter(uint32_t t, uint32_t& number, uint32_t& id) {
+	usleep(t * RaftNode::ElectionTimeoutBase * 1000);
 	std::map<uint32_t, std::vector<int32_t>> mp;
-	id = -1; //注意：int32_t (-1) > uint32_t (5) 防止直接比较
-	number = 0;
+	id = ~0u; //注意：int32_t (-1) > uint32_t (5) 防止直接比较
+	number = 0u;
 	uint32_t last = 0;
 	for (uint32_t i = 0; i < rafts.size(); ++i) {
 		if (!connected[i])
 			continue;
 		uint32_t term;
-		if (rafts[i]->isLeader(&term))
+		if (rafts[i]->isLeader(term))
 			mp[term].push_back(rafts[i]->Id());
 		last = last < term ? term : last;
 	}
+
 	if (mp.size()) {
 		auto &leaders = mp[last];
 		number = leaders.size();
@@ -173,11 +181,11 @@ static uint32_t checkTerm(){
 
 static void PrintAllNodeStatus(){
 	for (auto e : rafts)
-		if (e) e->Status();
+		if (e) e->PrintStatus();
 }
 
 static void PrintRaftNodeStatus(uint32_t index){
-	rafts[index]->Status();
+	rafts[index]->PrintStatus();
 }
 
 TEST(Raft, InitialElection){
@@ -197,7 +205,7 @@ TEST(Raft, InitialElection){
     term2 = checkTerm();
 
     //After t > ElectionTimeoutTop, only a leader should be elected
-    usleep(2 * RaftNode::ElectionTimeoutBase * 1000);
+    usleep(4 * RaftNode::ElectionTimeoutBase * 1000);
     checkOneLeader();
     term3 = checkTerm();
 
@@ -236,6 +244,7 @@ TEST(Raft, ReElection){
     // if a quorum arises, it should elect a leader.
     startServer((leader2 + 1) % 5);
     startServer((leader2 + 2) % 5);
+	usleep(2 * RaftNode::ElectionTimeoutBase * 1000);
     checkOneLeader();
 
     // re-join of last node shouldn't prevent leader from existing.
@@ -246,7 +255,7 @@ TEST(Raft, ReElection){
 }
 
 // checks how many servers think log entry logs_[index] is committed / agree on the same value?
-bool isCommittedAt(uint32_t index, int32_t& cmd, int& count){
+static bool isCommittedAt(uint32_t index, uint32_t& cmd, int& count){
     cmd = -1; //4294967295
     count = 0;
     uint32_t pre = ~0u;
@@ -254,11 +263,11 @@ bool isCommittedAt(uint32_t index, int32_t& cmd, int& count){
         Log log;
         if(e && !e->logAt(index, log))continue;
         cmd = log.cmd_;
-        if(count && pre_cmd != cmd){
-            printf("not match at %u, %u : %u\n", index, pre_cmd, cmd);
+        if(count && pre != cmd){
+            printf("not match at %u, %u : %u\n", index, pre, cmd);
 			return false;
         }
-        pre_cmd = cmd;
+        pre = cmd;
         count += 1;
     }
     return true;
@@ -270,7 +279,7 @@ bool isCommittedAt(uint32_t index, int32_t& cmd, int& count){
 static uint32_t oneAgreement(uint32_t cmd, int expect){
     int count;
 	int64_t now = Time::Now(); //ms
-    for(; Time::now() < (now + 5000);){
+    for(; Time::Now() < (now + 5000);){
         uint32_t index = ~0u; //相当于是-1，因为logs_第一个加入项后的index = 0
         for(int i = 0; i < rafts.size(); ++i){
             if(!connected[i])continue;
@@ -284,7 +293,7 @@ static uint32_t oneAgreement(uint32_t cmd, int expect){
         for (int k = 0; k < 20; ++k) {
 			usleep(50 * 1000);
 			uint32_t command_;
-			if (!isCommittedAt(index, &command_, &count))
+			if (!isCommittedAt(index, command_, count))
 				continue;
 			if (count >= expect && command_ == cmd)
 				return index;
@@ -295,12 +304,12 @@ static uint32_t oneAgreement(uint32_t cmd, int expect){
 }
 
 //wait for at least n servers to commit. but don't wait forever.
-uint32_t wait(uint32_t index, int expect, uint32_t start_term){
+static uint32_t wait(uint32_t index, int expect, uint32_t start_term){
     uint32_t to = 10;
     uint32_t cmd;
     int count;
     for(int i = 0; i < 10; ++i){
-        if (!isCommittedAt(index, &cmd, &count))
+        if (!isCommittedAt(index, cmd, count))
 			continue;
 		if (count >= expect)
 			break;
@@ -310,25 +319,24 @@ uint32_t wait(uint32_t index, int expect, uint32_t start_term){
 			if (e->Term() > start_term)
 				return ~0;
 	}
-	isCommittedAt(index, &cmd, &count);
+	isCommittedAt(index, cmd, count);
 	if (count < expect)
-		return ~0;
+		return ~0u;
 	return cmd;
 }
 
-TEST(Raft, AgreementWithoutNetworkFailure)
-{
+TEST(Raft, AgreementWithoutNetworkFailure){
 	uint32_t total = 3;
 	startRaftCluster(total);
-	int32_t number;
-	int32_t id;
-	CheckOneLeaderAfter(4, &number, &id);
+	uint32_t number;
+	uint32_t id;
+	CheckOneLeaderAfter(4, number, id);
 	ASSERT_EQ(number, 1);
 
 	for (uint32_t i = 0; i < 10u; ++i) {
 		uint32_t commit;
 		int count;
-		ASSERT_TRUE(isCommittedAt(i, &commit, &count));
+		ASSERT_TRUE(isCommittedAt(i, commit, count));
 		ASSERT_EQ(count, 0);
 		uint32_t index = oneAgreement(i, total);
 		ASSERT_EQ(index, i);
@@ -338,9 +346,9 @@ TEST(Raft, AgreementWithoutNetworkFailure)
 TEST(Raft, AgreementWithFollowerDisconnected){
 	uint32_t total = 3;
 	startRaftCluster(total);
-	int32_t number;
-	int32_t leader;
-	CheckOneLeaderAfter(4, &number, &leader);
+	uint32_t number;
+	uint32_t leader;
+	CheckOneLeaderAfter(4, number, leader);
 	ASSERT_EQ(number, 1);
 
 	uint32_t lg  = 0;
@@ -352,8 +360,8 @@ TEST(Raft, AgreementWithFollowerDisconnected){
 	ASSERT_NE(oneAgreement(lg++, total-1), ~0u);
 
 	crashForThenStart(leader, 2);
-	int32_t leader2;
-	CheckOneLeaderAfter(4, &number, &leader2);
+	uint32_t leader2;
+	CheckOneLeaderAfter(4, number, leader2);
 	ASSERT_EQ(number, 1);
 
 	ASSERT_NE(oneAgreement(lg++, total-1), ~0u);
@@ -364,8 +372,8 @@ TEST(Raft, AgreementWithFollowerDisconnected){
 	ASSERT_NE(oneAgreement(lg++, total), ~0u);
 
 	crashForThenStart(leader2, 2);
-	int32_t leader3;
-	CheckOneLeaderAfter(4, &number, &leader3);
+	uint32_t leader3;
+	CheckOneLeaderAfter(4, number, leader3);
 	ASSERT_EQ(number, 1);
 	ASSERT_NE(oneAgreement(lg++, total), ~0u);
 }
@@ -376,11 +384,11 @@ TEST(Raft, AgreementWithHalfFollowerDisconnected){
 
 	uint32_t lg  = 0;
 	uint32_t idx = 0;
-	ASSERT_EQ(idx++, One(lg++, total));
+	ASSERT_EQ(idx++, oneAgreement(lg++, total));
 
-	int32_t number;
-	int32_t leader;
-	CheckOneLeaderAfter(0, &number, &leader);
+	uint32_t number;
+	uint32_t leader;
+	CheckOneLeaderAfter(0, number, leader);
 	ASSERT_EQ(number, 1);
 
 	crashServer((leader+1)%total);
@@ -388,25 +396,25 @@ TEST(Raft, AgreementWithHalfFollowerDisconnected){
 	crashServer((leader+3)%total);
 
 	uint32_t index;
-	ASSERT_TRUE(rafts[leader]->ClientLog(Log(lg++), &index));
+	ASSERT_TRUE(rafts[leader]->ClientLog(Log(lg++), index));
 	ASSERT_EQ(index, 1u);
 
 	usleep(2 * RaftNode::ElectionTimeoutBase * 1000);
 	uint32_t commit;
 	int count;
-	isCommittedAt(index, &commit, &count);
+	isCommittedAt(index, commit, count);
 	ASSERT_EQ(count, 0);
 
 	startServer((leader+1)%total);
 	startServer((leader+2)%total);
 	startServer((leader+3)%total);
 
-	int32_t leader2;
-	CheckOneLeaderAfter(4, &number, &leader2);
+	uint32_t leader2;
+	CheckOneLeaderAfter(4, number, leader2);
 	ASSERT_EQ(number, 1);
 
 	uint32_t index2;
-	ASSERT_TRUE(rafts[leader2]->ClientLog(Log(lg++), &index2));
+	ASSERT_TRUE(rafts[leader2]->ClientLog(Log(lg++), index2));
 	ASSERT_TRUE(index2 >= 1 && index2 < 3);
 
 	ASSERT_NE(oneAgreement(lg++, total), ~0u);
@@ -422,23 +430,23 @@ TEST(Raft, RejoinOfPartitionedLeader){
 	uint32_t idx = 0;
 	ASSERT_EQ(idx++, oneAgreement(lg++, total));
 
-	int32_t number;
-	int32_t leader;
-	CheckOneLeaderAfter(0, &number, &leader);
+	uint32_t number;
+	uint32_t leader;
+	CheckOneLeaderAfter(0, number, leader);
 	ASSERT_EQ(number, 1);
 
 	crashServer(leader);
 
 	uint32_t index;
-	ASSERT_TRUE(rafts[leader]->ClientLog(Log(lg++), &index));
-	ASSERT_TRUE(rafts[leader]->ClientLog(Log(lg++), &index));
-	ASSERT_TRUE(rafts[leader]->ClientLog(Log(lg++), &index));
+	ASSERT_FALSE(rafts[leader]->ClientLog(Log(lg++), index));
+	ASSERT_FALSE(rafts[leader]->ClientLog(Log(lg++), index));
+	ASSERT_FALSE(rafts[leader]->ClientLog(Log(lg++), index));
 
 	usleep(2 * RaftNode::ElectionTimeoutBase * 1000);
-	ASSERT_EQ(idx++, One(lg++, total-1));
+	ASSERT_EQ(idx++, oneAgreement(lg++, total-1));
 
-	int32_t leader2;
-	CheckOneLeaderAfter(0, &number, &leader2);
+	uint32_t leader2;
+	CheckOneLeaderAfter(0, number, leader2);
 	ASSERT_EQ(number, 1);
 
 	crashServer(leader2);
@@ -455,11 +463,11 @@ TEST(Raft, LeaderBackupIncorrectLog){
 	startRaftCluster(total);
 
 	uint32_t lg  = 0;
-	ASSERT_NE(One(lg++, total), ~0u);
+	ASSERT_NE(oneAgreement(lg++, total), ~0u);
 
-	int32_t number;
-	int32_t leader;
-	CheckOneLeaderAfter(0, &number, &leader);
+	uint32_t number;
+	uint32_t leader;
+	CheckOneLeaderAfter(0, number, leader);
 	ASSERT_EQ(number, 1);
 
 	crashServer((leader+2)%total);
@@ -469,7 +477,7 @@ TEST(Raft, LeaderBackupIncorrectLog){
 	int all = 30;
 	uint32_t index;
 	for (int i = 0; i < all; ++i)
-		ASSERT_TRUE(rafts[leader]->Start(Log(lg++), &index));
+		ASSERT_TRUE(rafts[leader]->ClientLog(Log(lg++), index));
 
 	crashServer((leader+0)%total);
 	crashServer((leader+1)%total);
@@ -479,19 +487,19 @@ TEST(Raft, LeaderBackupIncorrectLog){
 	startServer((leader+4)%total);
 
 	for (int i = 0; i < all; ++i)
-		ASSERT_NE(One(lg++, total-2), ~0u);
+		ASSERT_NE(oneAgreement(lg++, total-2), ~0u);
 
-	int32_t leader2;
-	CheckOneLeaderAfter(0, &number, &leader2);
+	uint32_t leader2;
+	CheckOneLeaderAfter(0, number, leader2);
 	ASSERT_EQ(number, 1);
 
-	int32_t other = (leader + 2) % total;
+	uint32_t other = (leader + 2) % total;
 	if (other == leader2)
 		other = (leader2 + 1) % total;
 	crashServer(other);
 
 	for (int i = 0; i < all; ++i)
-		ASSERT_TRUE(rafts[leader2]->Start(Log(lg++), &index));
+		ASSERT_TRUE(rafts[leader2]->ClientLog(Log(lg++), index));
 	usleep(RaftNode::ElectionTimeoutBase * 1000);
 
 	for (int i = 0; i < int(total); ++i)
@@ -499,34 +507,32 @@ TEST(Raft, LeaderBackupIncorrectLog){
 	startServer((leader+0)%total);
 	startServer((leader+1)%total);
 	startServer(other);
-
 	usleep(4 * RaftNode::ElectionTimeoutBase * 1000);
 	for (int i = 0; i < all; ++i)
-		ASSERT_NE(One(lg++, total-2), ~0u);
+		ASSERT_NE(oneAgreement(lg++, total-2), ~0u);
 
 	for (int i = 0; i < int(total); ++i)
 		startServer(i);
 
-	ASSERT_NE(One(lg++, total), ~0u);
+	ASSERT_NE(oneAgreement(lg++, total), ~0u);
 }
 
-static uint32_t RpcCount(){
+static uint32_t rpc_count(){
 	uint32_t ret = 0;
 	for (auto e : rafts)
 		ret += e->RpcCount();
 	return ret;
 }
 
-TEST(Raft, RpcCount)
-{
+TEST(Raft, RpcCount){
 	uint32_t total = 3;
 	startRaftCluster(total);
 
-	int32_t number;
-	int32_t leader;
-	CheckOneLeaderAfter(1, &number, &leader);
+	uint32_t number;
+	uint32_t leader;
+	CheckOneLeaderAfter(2, number, leader);
 	ASSERT_EQ(number, 1);
-	uint32_t count = RpcCount();
+	uint32_t count = rpc_count();
 	ASSERT_LT(count, 30u);
 
 	uint32_t lg  = 0;
@@ -534,16 +540,16 @@ TEST(Raft, RpcCount)
 loop:
 	for (int i = 0; i < 3; ++i) {
 		if (i) usleep(2 * RaftNode::ElectionTimeoutBase * 1000);
-		all1 = RpcCount();
+		all1 = rpc_count();
 		uint32_t index, term;
-		ASSERT_TRUE(rafts[leader]->ClientLog(Log(lg++), &index));
+		ASSERT_TRUE(rafts[leader]->ClientLog(Log(lg++), index));
 		term = rafts[leader]->Term();
 		int iter = 10;
-		vector<uint32_t> logs;
+		std::vector<uint32_t> logs;
 		for (int j = 1; j < iter+2; ++j) {
 			uint32_t tmp_idx;
 			logs.push_back(lg);
-			if (!rafts[leader]->ClientLog(Log(lg++), &tmp_idx))
+			if (!rafts[leader]->ClientLog(Log(lg++), tmp_idx))
 				goto loop;
 			uint32_t tmp_trm = rafts[leader]->Term();
 			if (tmp_trm != term)
@@ -551,7 +557,7 @@ loop:
 			ASSERT_EQ(index+j, tmp_idx);
 		}
 		for (int j = 1; j < iter+1; ++j) {
-			uint32_t number = Wait(index+j, total, term);
+			uint32_t number = wait(index+j, total, term);
 			if (number == ~0u)
 				goto loop;
 			ASSERT_EQ(number, logs[j-1]);
@@ -565,8 +571,8 @@ loop:
 		ASSERT_LE(int(all2-all1), (iter+1+3)*3);
 		break;
 	}
-    usleep(2 * RaftNode::ElectionTimeoutBase * 1000)
-	uint32_t all3 = RpcCount();
+    usleep(2 * RaftNode::ElectionTimeoutBase * 1000);
+	uint32_t all3 = rpc_count();
 	ASSERT_LE(all3 - all2, 90u);
 }
 
@@ -581,12 +587,12 @@ TEST(Raft, LeaderFrequentlyChange){
 
 	uint32_t iter = 30;
 	for (uint32_t i = 1; i <= iter; ++i) {
-		int32_t leader = -1;
+		uint32_t leader = ~0u;
 		for (uint32_t j = 0; j < total; ++j) {
 			if (!connected[j]) continue;
 			uint32_t index;
-			if (rafts[j] && rafts[j]->ClientLog(Log(i), &index)) {
-				leader = int32_t(j);
+			if (rafts[j] && rafts[j]->ClientLog(Log(i), index)) {
+				leader = j;
 				break;
 			}
 		}
@@ -595,9 +601,9 @@ TEST(Raft, LeaderFrequentlyChange){
 		else
 			usleep((dist(eng) % 13) * 1000);
 
-		if (leader != -1) {
+		if (leader != ~0u) {
 			crashServer(leader);
-			usleep(RaftServer::ElectionTimeoutBase * 1000);
+			usleep(RaftNode::ElectionTimeoutBase * 1000);
 			--up;
 		}
 

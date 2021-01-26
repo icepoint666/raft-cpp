@@ -9,7 +9,7 @@
 #include "../network/eventbase.hpp"
 #include "rpc_connection.hpp"
 #include "../network/channel.hpp"
-
+#include <iostream>
 namespace Mushroom {
 
 RpcServer::RpcServer(EventBase *event_base, uint16_t port)

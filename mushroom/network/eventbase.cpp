@@ -84,7 +84,7 @@ void EventBase::Exit()
 
 void EventBase::WakeUp()
 {
-	char buf;
+	char buf = '1';
 	ssize_t r = write(wake_up_[1], &buf, sizeof(buf));
 	assert(r > 0);
 }

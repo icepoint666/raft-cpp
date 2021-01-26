@@ -34,8 +34,8 @@ include_directories("${source_dir}/googletest/include")
 message(STATUS "[__INFO__] CMAKE_SOURCE_DIR: ${CMAKE_SOURCE_DIR}")
 #include_directories(${CMAKE_SOURCE_DIR}/mushroom)
 
-file(GLOB SRCS ${CMAKE_SOURCE_DIR}/test/*.cpp)
-add_executable(testcase ${SRCS})
+#file(GLOB SRCS ${CMAKE_SOURCE_DIR}/test/*.cpp)
+add_executable(testcase ${CMAKE_SOURCE_DIR}/test/test.cpp ${CMAKE_SOURCE_DIR}/test/test_raft.cpp)
 
 target_link_libraries(testcase libgtest ${CMAKE_SOURCE_DIR}/mushroom/build/libMushroom.a)
 
