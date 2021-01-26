@@ -31,7 +31,7 @@ public:
     void PrintStatus();
 
     void Start();
-
+	
 	void Close();
 
     bool isLeader(uint32_t &term);
@@ -41,11 +41,11 @@ public:
 	uint32_t Term();
 
 	uint32_t Id();
-
-    void ToBeFollower(uint32_t term);
-
+	
+	void ToBeFollower(uint32_t term);
+	
 	void ToBeCandidate();
-
+	
 	void ToBeLeader();
 
     void SendRequestVoteRPC();
